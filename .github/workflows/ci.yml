@@ -2,12 +2,40 @@ name: Validate
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  staged-update:
+  test-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - run: echo "AFO v0.3 file-by-file update in progress; final CI workflow will be restored after the verified tree is complete."
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - run: npm run validate
+      - run: npm run verify:bundled-cli
+      - name: Build runtime image
+        run: docker build -t afo-ask-copilot-runtime:${{ github.sha }} -f runtime/Dockerfile runtime
+      - name: Verify image user and no-secret health
+        run: |
+          test "$(docker image inspect afo-ask-copilot-runtime:${{ github.sha }} --format '{{.Config.User}}')" = "node"
+          docker run -d --name afo-ask-copilot-runtime -p 8080:8080 afo-ask-copilot-runtime:${{ github.sha }}
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/health > health.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat health.json
+          node -e "const h=require('./health.json'); if(h.ready!==false||h.copilot_token_configured!==false||h.runtime_secret_configured!==false) process.exit(1)"
+          docker stop --time 10 afo-ask-copilot-runtime
+          test "$(docker inspect afo-ask-copilot-runtime --format '{{.State.ExitCode}}')" = "0"
