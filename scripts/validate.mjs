@@ -1,75 +1,120 @@
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
-import {
-  MAX_PROMPT_LENGTH,
-  MAX_REQUEST_BODY_BYTES,
-  SUPPORTED_PROTOCOL_VERSIONS,
-  TOOLS,
-} from "../apps/gateway/src/mcp.js";
 
-const syntaxFiles = [
+const javascriptFiles = [
   "apps/gateway/src/index.js",
   "apps/gateway/src/mcp.js",
+  "runtime/src/errors.js",
+  "runtime/src/client-manager.js",
+  "runtime/src/session-manager.js",
+  "runtime/src/app.js",
   "runtime/src/server.js",
+  "runtime/src/verify-bundled-cli.js",
+  "scripts/validate.mjs",
   "tests/gateway.test.mjs",
+  "tests/runtime.test.mjs",
 ];
 
-const jsonFiles = [
-  "package.json",
-  "apps/gateway/package.json",
-  "apps/gateway/mcp.manifest.json",
-  "runtime/package.json",
-];
-
-for (const path of syntaxFiles) {
-  const result = spawnSync(process.execPath, ["--check", path], {
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr || result.stdout);
-    process.exit(result.status || 1);
-  }
+for (const file of javascriptFiles) {
+  execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
 }
 
-const parsedJson = new Map();
-for (const path of jsonFiles) {
-  parsedJson.set(path, JSON.parse(await readFile(path, "utf8")));
-}
+const rootPackage = await readJson("package.json");
+const gatewayPackage = await readJson("apps/gateway/package.json");
+const runtimePackage = await readJson("runtime/package.json");
+const manifest = await readJson("apps/gateway/mcp.manifest.json");
+const rootLock = await readJson("package-lock.json");
+const runtimeLock = await readJson("runtime/package-lock.json");
+const wrangler = await readJson("apps/gateway/wrangler.jsonc");
+const dockerfile = await readFile("runtime/Dockerfile", "utf8");
+const gatewaySource = await readFile("apps/gateway/src/mcp.js", "utf8");
+const runtimeSource = await readFile("runtime/src/client-manager.js", "utf8");
 
-const rootPackage = parsedJson.get("package.json");
-const gatewayPackage = parsedJson.get("apps/gateway/package.json");
-const manifest = parsedJson.get("apps/gateway/mcp.manifest.json");
-
-if (rootPackage.version !== "0.2.0" || gatewayPackage.version !== "0.2.0") {
-  throw new Error("Root and gateway package versions must remain synchronized at 0.2.0");
-}
-
-if (manifest.version !== rootPackage.version) {
-  throw new Error("MCP manifest version must match the root package version");
-}
-
-if (JSON.stringify(manifest.tools) !== JSON.stringify(TOOLS)) {
-  throw new Error("MCP manifest tools must match the gateway tools/list contract");
-}
-
-if (
-  JSON.stringify(manifest.protocol_versions) !==
-  JSON.stringify(SUPPORTED_PROTOCOL_VERSIONS)
-) {
-  throw new Error("MCP manifest protocol versions are out of sync");
-}
-
-if (
-  manifest.limits.request_body_bytes !== MAX_REQUEST_BODY_BYTES ||
-  manifest.limits.prompt_characters !== MAX_PROMPT_LENGTH
-) {
-  throw new Error("MCP manifest request limits are out of sync");
-}
-
-if (manifest.transport.token_secret !== "AFO_ASK_COPILOT_TOKEN") {
-  throw new Error("MCP manifest must use AFO_ASK_COPILOT_TOKEN");
-}
+assert(rootPackage.version === "0.3.0", "root package version must be 0.3.0");
+assert(gatewayPackage.version === "0.3.0", "gateway package version must be 0.3.0");
+assert(runtimePackage.version === "0.3.0", "runtime package version must be 0.3.0");
+assert(manifest.version === "0.3.0", "manifest version must be 0.3.0");
+assert(
+  runtimePackage.dependencies["@github/copilot-sdk"] === "1.0.7",
+  "runtime must pin @github/copilot-sdk@1.0.7",
+);
+assertLock(rootLock, "root");
+assertLock(runtimeLock, "runtime");
+assert(
+  gatewayPackage.dependencies["@cloudflare/containers"] === "0.3.7",
+  "gateway Container dependency must be pinned",
+);
+assert(manifest.tools.length === 1, "manifest must expose exactly one tool");
+assert(manifest.tools[0].name === "ask_copilot", "manifest tool must be ask_copilot");
+assert(manifest.mutation_tools_enabled === false, "mutation tools must remain disabled");
+assert(
+  manifest.transport.token_secret === "AFO_ASK_COPILOT_TOKEN",
+  "gateway bearer secret name must remain synchronized",
+);
+assert(
+  manifest.limits.request_body_bytes === 256000 &&
+    manifest.limits.prompt_characters === 20000,
+  "manifest request limits must remain synchronized",
+);
+assert(
+  wrangler.vars.RUNTIME_TIMEOUT_MS === "60000",
+  "Wrangler runtime timeout must be explicit",
+);
+assert(
+  dockerfile.includes("FROM node:22-") && dockerfile.includes("npm ci"),
+  "Dockerfile must use Node 22 and npm ci",
+);
+assert(dockerfile.includes("USER node"), "Dockerfile must run as non-root node user");
+assert(dockerfile.includes("HEALTHCHECK"), "Dockerfile must define a health check");
+assert(
+  !dockerfile.includes("COPILOT_GITHUB_TOKEN=") &&
+    !dockerfile.includes("RUNTIME_SHARED_SECRET="),
+  "Dockerfile must not bake secret values",
+);
+assert(
+  gatewaySource.includes('runtime_status: "copilot_response_received"') &&
+    gatewaySource.includes('runtime_status: "copilot_response_not_received"'),
+  "gateway must distinguish successful Copilot responses from failures",
+);
+assert(
+  runtimeSource.includes("gitHubToken: token") &&
+    runtimeSource.includes("useLoggedInUser: false"),
+  "runtime must use verified client-level authentication",
+);
 
 console.log(
-  `Validated ${syntaxFiles.length} JavaScript files, ${jsonFiles.length} JSON files, and synchronized MCP metadata.`,
+  JSON.stringify({
+    ok: true,
+    version: "0.3.0",
+    javascript_files_checked: javascriptFiles.length,
+    sdk_version: rootLock.packages["node_modules/@github/copilot-sdk"].version,
+    copilot_runtime_version: rootLock.packages["node_modules/@github/copilot"].version,
+    bundled_cli_version:
+      rootLock.packages["node_modules/@github/copilot-linux-x64"]?.version || null,
+  }),
 );
+
+async function readJson(path) {
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+function assertLock(lock, name) {
+  assert(
+    lock.packages["node_modules/@github/copilot-sdk"]?.version === "1.0.7",
+    `${name} lockfile must resolve @github/copilot-sdk@1.0.7`,
+  );
+  assert(
+    lock.packages["node_modules/@github/copilot"]?.version === "1.0.71",
+    `${name} lockfile must resolve @github/copilot@1.0.71`,
+  );
+  assert(
+    lock.packages["node_modules/@github/copilot-linux-x64"]?.version === "1.0.71",
+    `${name} lockfile must include the Linux x64 bundled Copilot CLI`,
+  );
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
