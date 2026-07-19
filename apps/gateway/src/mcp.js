@@ -1,6 +1,6 @@
 const SERVER_INFO = Object.freeze({
   name: "afo-ask-copilot",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 export const MAX_REQUEST_BODY_BYTES = 256_000;
@@ -14,7 +14,7 @@ export const TOOLS = Object.freeze([
   Object.freeze({
     name: "ask_copilot",
     description:
-      "Accept a read-only question for GitHub Copilot. In v0.2 the gateway returns an explicit placeholder and does not contact Copilot.",
+      "Ask GitHub Copilot a read-only text question through the authenticated AFO Container runtime.",
     inputSchema: Object.freeze({
       type: "object",
       additionalProperties: false,
@@ -30,19 +30,20 @@ export const TOOLS = Object.freeze([
           minLength: 3,
           maxLength: 200,
           pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-          description: "Optional repository in owner/repo form.",
+          description:
+            "Optional repository metadata in owner/repo form. Repository grounding is not implied by v0.3.",
         }),
         model: Object.freeze({
           type: "string",
           minLength: 1,
           maxLength: 100,
-          description: "Optional future Copilot model identifier.",
+          description: "Optional Copilot model identifier verified by the runtime.",
         }),
         session_id: Object.freeze({
           type: "string",
           minLength: 1,
           maxLength: 200,
-          description: "Optional future resumable Copilot session identifier.",
+          description: "Optional resumable Copilot session identifier.",
         }),
       }),
       required: Object.freeze(["prompt"]),
@@ -53,6 +54,9 @@ export const TOOLS = Object.freeze([
 const RATE_LIMIT_BUCKETS = new Map();
 const DEFAULT_RATE_LIMIT_REQUESTS = 60;
 const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+const DEFAULT_RUNTIME_TIMEOUT_MS = 60_000;
+const MIN_RUNTIME_TIMEOUT_MS = 1_000;
+const MAX_RUNTIME_TIMEOUT_MS = 120_000;
 const ALLOWED_ARGUMENT_KEYS = new Set([
   "prompt",
   "repository",
@@ -63,8 +67,8 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 export function createGatewayHandler(options = {}) {
   const logger = options.logger || console;
-  const now = options.now || (() => new Date());
   const randomUUID = options.randomUUID || (() => crypto.randomUUID());
+  const runtimeInvoker = options.runtimeInvoker || unavailableRuntimeInvoker;
 
   return async function handleRequest(request, env = {}) {
     const startedAt = Date.now();
@@ -206,7 +210,12 @@ export function createGatewayHandler(options = {}) {
           ? message.params.name
           : undefined;
 
-      const response = handleMcpMessage(message, requestId, now);
+      const response = await handleMcpMessage(
+        message,
+        requestId,
+        env,
+        runtimeInvoker,
+      );
       status = response.status;
       return response;
     } catch {
@@ -221,13 +230,7 @@ export function createGatewayHandler(options = {}) {
           elapsed_ms: Date.now() - startedAt,
         }),
       );
-      return rpcError(
-        null,
-        -32603,
-        "Internal error",
-        requestId,
-        status,
-      );
+      return rpcError(null, -32603, "Internal error", requestId, status);
     } finally {
       logger.log?.(
         JSON.stringify({
@@ -246,7 +249,7 @@ export function createGatewayHandler(options = {}) {
   };
 }
 
-function handleMcpMessage(message, requestId, now) {
+async function handleMcpMessage(message, requestId, env, runtimeInvoker) {
   const hasId = Object.prototype.hasOwnProperty.call(message, "id");
   const id = hasId ? message.id : null;
 
@@ -289,7 +292,7 @@ function handleMcpMessage(message, requestId, now) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
         instructions:
-          "Private single-user read-only gateway. v0.2 accepts ask_copilot requests but does not contact the Copilot runtime.",
+          "Private single-user read-only gateway. ask_copilot forwards authenticated requests to the v0.3 Copilot Container runtime.",
       },
       requestId,
     );
@@ -304,13 +307,19 @@ function handleMcpMessage(message, requestId, now) {
   }
 
   if (message.method === "tools/call") {
-    return handleToolCall(id, message.params, requestId, now);
+    return handleToolCall(
+      id,
+      message.params,
+      requestId,
+      env,
+      runtimeInvoker,
+    );
   }
 
   return rpcError(id, -32601, "Method not found", requestId);
 }
 
-function handleToolCall(id, params, requestId, now) {
+async function handleToolCall(id, params, requestId, env, runtimeInvoker) {
   if (!isPlainObject(params) || params.name !== "ask_copilot") {
     return rpcError(id, -32602, "Unknown tool", requestId);
   }
@@ -321,33 +330,66 @@ function handleToolCall(id, params, requestId, now) {
   }
 
   const { prompt, repository, model, session_id: sessionId } = validation.value;
-  const timestamp = now().toISOString();
-  const metadata = {
-    accepted: true,
-    request_id: requestId,
-    tool_name: "ask_copilot",
-    repository: repository || null,
-    model: model || "auto",
-    session_id: sessionId || null,
-    runtime_status: "not_contacted_placeholder_v0.2",
-    timestamp,
-    prompt_length: prompt.length,
-    message:
-      "The Remote MCP gateway accepted and validated this request. GitHub Copilot was not contacted; Container runtime execution is scheduled for v0.3.",
-  };
+  const timeoutMs = normalizeRuntimeTimeout(env.RUNTIME_TIMEOUT_MS);
 
-  return rpcResult(
-    id,
-    {
-      content: [{ type: "text", text: metadata.message }],
-      structuredContent: metadata,
-      isError: false,
-    },
-    requestId,
-  );
+  try {
+    const runtime = await runtimeInvoker({
+      env,
+      requestId,
+      timeoutMs,
+      payload: {
+        prompt,
+        repository,
+        model,
+        session_id: sessionId,
+        timeout_ms: timeoutMs,
+        request_id: requestId,
+      },
+    });
+    const normalized = await normalizeRuntimeResponse(runtime);
+
+    return rpcResult(
+      id,
+      {
+        content: [{ type: "text", text: normalized.text }],
+        structuredContent: {
+          ok: true,
+          request_id: requestId,
+          runtime_request_id: normalized.request_id,
+          tool_name: "ask_copilot",
+          repository: repository || null,
+          model: normalized.model,
+          session_id: normalized.session_id,
+          runtime_status: "copilot_response_received",
+        },
+        isError: false,
+      },
+      requestId,
+    );
+  } catch (error) {
+    const normalized = normalizeGatewayRuntimeError(error);
+    return rpcResult(
+      id,
+      {
+        content: [{ type: "text", text: normalized.message }],
+        structuredContent: {
+          ok: false,
+          request_id: requestId,
+          tool_name: "ask_copilot",
+          runtime_status: "copilot_response_not_received",
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+          },
+        },
+        isError: true,
+      },
+      requestId,
+    );
+  }
 }
 
-function validateAskCopilotArguments(value) {
+export function validateAskCopilotArguments(value) {
   if (!isPlainObject(value)) {
     return { ok: false, error: "arguments must be an object" };
   }
@@ -390,6 +432,119 @@ function validateAskCopilotArguments(value) {
       session_id: sessionId.value,
     },
   };
+}
+
+async function normalizeRuntimeResponse(response) {
+  if (!(response instanceof Response)) {
+    throw new GatewayRuntimeError(
+      "RUNTIME_UNAVAILABLE",
+      "The Copilot runtime did not return an HTTP response.",
+    );
+  }
+
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new GatewayRuntimeError(
+      "RUNTIME_INVALID_RESPONSE",
+      "The Copilot runtime returned an invalid response.",
+    );
+  }
+
+  if (response.status === 401) {
+    throw new GatewayRuntimeError(
+      "RUNTIME_AUTHENTICATION_FAILED",
+      "Worker-to-Container authentication failed.",
+    );
+  }
+
+  if (!response.ok || !body?.ok) {
+    const code = normalizeErrorCode(body?.error?.code);
+    const message = normalizeErrorMessage(code, body?.error?.message);
+    throw new GatewayRuntimeError(code, message);
+  }
+
+  if (
+    typeof body.text !== "string" ||
+    typeof body.session_id !== "string" ||
+    typeof body.request_id !== "string"
+  ) {
+    throw new GatewayRuntimeError(
+      "RUNTIME_INVALID_RESPONSE",
+      "The Copilot runtime returned an incomplete success response.",
+    );
+  }
+
+  return {
+    text: body.text,
+    session_id: body.session_id,
+    model: typeof body.model === "string" ? body.model : "auto",
+    request_id: body.request_id,
+  };
+}
+
+function normalizeGatewayRuntimeError(error) {
+  if (error instanceof GatewayRuntimeError) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : "";
+  if (/timeout|timed out/i.test(message)) {
+    return new GatewayRuntimeError(
+      "RUNTIME_TIMEOUT",
+      "The Copilot runtime did not respond before the gateway timeout.",
+    );
+  }
+  return new GatewayRuntimeError(
+    "RUNTIME_UNAVAILABLE",
+    "The Copilot runtime is unavailable.",
+  );
+}
+
+function normalizeErrorCode(value) {
+  const code = typeof value === "string" ? value : "RUNTIME_ERROR";
+  return /^[A-Z0-9_]{3,80}$/.test(code) ? code : "RUNTIME_ERROR";
+}
+
+function normalizeErrorMessage(code, value) {
+  const safeMessages = {
+    COPILOT_TIMEOUT: "Copilot did not finish before the request timeout.",
+    COPILOT_SESSION_RESUME_FAILED:
+      "The requested Copilot session could not be resumed.",
+    COPILOT_MODEL_NOT_FOUND: "The requested Copilot model is not available.",
+    RUNTIME_CONFIGURATION_ERROR: "The Copilot runtime is not configured.",
+    RUNTIME_UNAUTHORIZED: "Worker-to-Container authentication failed.",
+  };
+  if (safeMessages[code]) {
+    return safeMessages[code];
+  }
+  if (typeof value === "string" && value.length > 0 && value.length <= 200) {
+    return value;
+  }
+  return "The Copilot runtime could not complete the request.";
+}
+
+class GatewayRuntimeError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "GatewayRuntimeError";
+    this.code = code;
+  }
+}
+
+async function unavailableRuntimeInvoker() {
+  throw new GatewayRuntimeError(
+    "RUNTIME_UNAVAILABLE",
+    "The Copilot runtime binding is unavailable.",
+  );
+}
+
+function normalizeRuntimeTimeout(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    return DEFAULT_RUNTIME_TIMEOUT_MS;
+  }
+  return Math.min(MAX_RUNTIME_TIMEOUT_MS, Math.max(MIN_RUNTIME_TIMEOUT_MS, parsed));
 }
 
 function validateRequiredString(value, name, maxLength) {
