@@ -1,0 +1,15 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+dist/
+coverage/
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+*.log
+traces.jsonl
+runtime/session-state/

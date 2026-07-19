@@ -1,0 +1,18 @@
+{
+  "name": "afo-ask-copilot",
+  "version": "0.1.0",
+  "description": "Private read-only MCP gateway to GitHub Copilot.",
+  "transport": {
+    "type": "streamable_http",
+    "path": "/mcp",
+    "authentication": "bearer"
+  },
+  "tools": [
+    "ask_copilot",
+    "list_copilot_models",
+    "start_copilot_session",
+    "resume_copilot_session",
+    "get_copilot_session_status"
+  ],
+  "mutation_tools_enabled": false
+}

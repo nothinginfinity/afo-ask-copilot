@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-ask-copilot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "AUTH_MODE": "required",
+    "ALLOWED_ORIGINS": "https://chatgpt.com,https://chat.openai.com",
+    "DEPLOYMENT_ENV": "development"
+  },
+  "secrets": {
+    "required": [
+      "MCP_BEARER_TOKEN",
+      "COPILOT_GITHUB_TOKEN",
+      "RUNTIME_SHARED_SECRET"
+    ]
+  },
+  "containers": [
+    {
+      "max_instances": 1,
+      "class_name": "CopilotRuntime",
+      "image": "../../runtime/Dockerfile"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COPILOT_RUNTIME",
+        "class_name": "CopilotRuntime"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CopilotRuntime"]
+    }
+  ]
+}
