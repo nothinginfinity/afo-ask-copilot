@@ -13,3 +13,4 @@ coverage/
 *.log
 traces.jsonl
 runtime/session-state/
+.afo-v03/
