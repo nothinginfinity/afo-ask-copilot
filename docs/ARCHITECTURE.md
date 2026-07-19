@@ -8,20 +8,22 @@ AFO Ask Copilot has two execution layers.
 
 Responsibilities:
 
-- expose the remote MCP endpoint,
-- authenticate the caller,
-- validate request origin and JSON-RPC shape,
+- expose the Remote MCP endpoint,
+- authenticate the single approved caller,
+- validate origin, content type, request size, JSON, and JSON-RPC shape,
+- generate request IDs,
+- enforce prompt and best-effort rate limits,
 - publish a deterministic tool allowlist,
-- reject unsupported methods,
-- route approved calls to one named Container,
-- normalize and redact errors,
-- later write audit metadata to D1.
+- normalize protocol errors,
+- emit structured metadata-only logs,
+- forward approved runtime calls to one named Container beginning in v0.3,
+- later write minimal audit metadata to D1.
 
-The Worker must not execute the Copilot CLI.
+The Worker must not execute the Copilot SDK or CLI.
 
 ### 2. Cloudflare Container execution plane
 
-Responsibilities:
+Responsibilities beginning in v0.3:
 
 - run Node.js in a Linux environment,
 - load the GitHub Copilot SDK,
@@ -30,53 +32,76 @@ Responsibilities:
 - enforce read-only session configuration,
 - return normalized JSON to the Worker.
 
-The Container must not be publicly routable. It is reached through the Worker's Durable Object Container binding.
+The Container must not be publicly routable. It is reached through the Worker's named Container binding.
 
-## Request flow
+## v0.2 request flow
 
 ```text
-1. ChatGPT sends an MCP JSON-RPC request to POST /mcp.
-2. Worker verifies Bearer authentication.
-3. Worker validates Origin when present.
-4. Worker handles initialize, ping, and tools/list locally.
-5. Worker maps tools/call to a fixed internal runtime route.
-6. Worker gets the named Container instance `primary`.
-7. Container starts on demand and receives the request.
-8. Runtime creates or resumes a Copilot SDK session.
-9. Runtime returns normalized content.
-10. Worker returns an MCP tool result.
+1. Client sends a request to the Worker.
+2. GET /health returns non-sensitive readiness metadata.
+3. POST /mcp validates Origin when present.
+4. Worker validates Authorization: Bearer <AFO_ASK_COPILOT_TOKEN>.
+5. Worker applies an in-isolate fixed-window rate limit.
+6. Worker requires application/json and caps the request body.
+7. Worker parses and validates one JSON-RPC 2.0 message.
+8. Worker handles initialize, notifications/initialized, ping, and tools/list locally.
+9. Worker validates tools/call arguments for ask_copilot.
+10. Worker returns explicit placeholder metadata stating Copilot was not contacted.
 ```
+
+No v0.2 request reaches the Container.
+
+## v0.3 request flow
+
+```text
+1. Worker completes the v0.2 control-plane checks.
+2. Worker maps ask_copilot to a fixed internal runtime route.
+3. Worker gets the named Container instance primary.
+4. Worker authenticates the internal request with RUNTIME_SHARED_SECRET.
+5. Runtime creates or resumes a Copilot SDK session.
+6. Runtime sends the prompt with read-only policy constraints.
+7. Runtime returns normalized content and session metadata.
+8. Worker returns an MCP tool result.
+```
+
+## Protocol structure
+
+`apps/gateway/src/index.js` contains the Cloudflare-specific Container class and delegates fetch handling to `apps/gateway/src/mcp.js`.
+
+`apps/gateway/src/mcp.js` contains the testable protocol and control-plane core. It intentionally has no imports from `cloudflare:workers` or `@cloudflare/containers`, allowing Node's built-in test runner to exercise the real request handler without mocking the Cloudflare module loader.
+
+The source tool definition is exported once and validated against `apps/gateway/mcp.manifest.json` to prevent manifest and `tools/list` drift.
 
 ## Session model
 
 MCP transport state and Copilot conversation state are separate.
 
-- The gateway is designed to be stateless.
-- Copilot session IDs are explicit tool arguments.
-- The bootstrap runtime keeps only transient status metadata in memory.
+- The v0.2 gateway is stateless except for a best-effort in-isolate rate bucket.
+- Optional `session_id` is accepted as metadata but is not used.
+- Copilot session creation and resumption begin in v0.3.
 - Durable session metadata belongs in D1 in a later phase.
-- Copilot's own session persistence remains the source of conversation continuity until an AFO persistence layer is added.
 
 ## Authentication model
 
 Three secrets have separate purposes:
 
-- `MCP_BEARER_TOKEN`: authenticates ChatGPT to the Worker.
-- `COPILOT_GITHUB_TOKEN`: authenticates the Copilot SDK/CLI.
-- `RUNTIME_SHARED_SECRET`: authenticates Worker requests inside the Container boundary.
+- `AFO_ASK_COPILOT_TOKEN`: authenticates ChatGPT to the Worker.
+- `COPILOT_GITHUB_TOKEN`: will authenticate the Copilot SDK/CLI in v0.3.
+- `RUNTIME_SHARED_SECRET`: will authenticate Worker requests inside the Container boundary in v0.3.
 
-All three are Cloudflare Worker secrets. The Container class passes only the runtime-required values as environment variables.
+All real values must be Cloudflare secrets. No real value belongs in GitHub.
 
-## Repository context
+## Repository metadata
 
-Bootstrap `ask_copilot` accepts a prompt, optional model, and optional session ID. It does not yet accept arbitrary repository credentials or mount repositories.
+The v0.2 `ask_copilot` schema accepts an optional `repository` string in `owner/repo` form. It is returned as placeholder metadata only. The Worker does not fetch, mount, authorize, or inspect that repository.
 
-Repository-aware work will later use:
+Repository-aware work will later require:
 
 - an explicit repository allowlist,
 - read-only AFO GitHub tools,
 - CairnStone chain manifests and HEAD pointers,
-- normalized owner/repo/ref inputs.
+- normalized owner/repo/ref inputs,
+- prompt-injection boundaries for repository content.
 
 ## Mutation architecture
 

@@ -1,12 +1,14 @@
 # AFO Ask Copilot
 
-A private, single-user remote MCP service that lets ChatGPT delegate repository questions to GitHub Copilot through an AFO-controlled Cloudflare boundary.
+A private, single-user Remote MCP service that will let ChatGPT delegate approved repository questions to GitHub Copilot through an AFO-controlled Cloudflare boundary.
 
 ## Status
 
-**Bootstrap phase.** The repository contains the first executable gateway and container-runtime scaffold. It is not deployed and has not yet completed a live Copilot request.
+**v0.2 Remote MCP Gateway implementation.** The Cloudflare Worker now has a real authenticated JSON-RPC 2.0 `/mcp` boundary with one `ask_copilot` tool. The tool currently returns an explicit placeholder. It does not contact GitHub Copilot, execute the Container runtime, read repositories, or mutate external systems.
 
-## Intended architecture
+The project has not been deployed live. Copilot SDK and CLI execution remain a v0.3 responsibility of the Container.
+
+## Architecture
 
 ```text
 ChatGPT on iPhone
@@ -15,12 +17,13 @@ ChatGPT on iPhone
         v
 AFO Ask Copilot Worker
   - bearer authentication
-  - origin validation
-  - MCP request validation
-  - tool allowlist
-  - audit boundary
+  - origin and content-type validation
+  - JSON-RPC request validation
+  - request IDs and structured redacted logs
+  - request, prompt, and rate controls
+  - deterministic tool allowlist
         |
-        | private Container binding
+        | private Container binding (v0.3 execution)
         v
 Cloudflare Container
   - Node.js runtime
@@ -32,110 +35,114 @@ Cloudflare Container
 GitHub / approved AFO GitHub tools
 ```
 
-The Worker is the public control plane. The Container is the Linux execution plane required by the Copilot SDK and CLI.
+The Worker is the public control plane. The Container is the Linux execution plane required by the Copilot SDK and CLI. Copilot SDK execution must not be moved into the normal Worker runtime.
 
-## Phase-one tools
+## v0.2 HTTP surface
 
-- `ask_copilot`
-- `list_copilot_models`
-- `start_copilot_session`
-- `resume_copilot_session`
-- `get_copilot_session_status`
+- `GET /health` returns non-sensitive service readiness metadata.
+- `POST /mcp` accepts authenticated MCP JSON-RPC requests.
+- `OPTIONS /mcp` supports configured browser origins.
 
-Phase one is read-only by policy. It does not expose file writes, branch changes, commits, pull-request creation, workflow dispatch, deployment, or Cloudflare mutations.
+The MCP endpoint supports:
+
+- `initialize`
+- `notifications/initialized`
+- `ping`
+- `tools/list`
+- `tools/call`
+
+Batch JSON-RPC requests are not supported. Notifications return no JSON-RPC response body.
+
+## v0.2 tool
+
+### `ask_copilot`
+
+Input:
+
+```json
+{
+  "prompt": "Review the repository architecture.",
+  "repository": "nothinginfinity/afo-ask-copilot",
+  "model": "optional-model",
+  "session_id": "optional-session"
+}
+```
+
+Only `prompt` is required. The placeholder response includes a request ID, tool name, repository, model, session ID, runtime status, prompt length, and timestamp. It always states that GitHub Copilot was not contacted.
+
+## Authentication
+
+Send:
+
+```text
+Authorization: Bearer <AFO_ASK_COPILOT_TOKEN>
+```
+
+For local development, copy `apps/gateway/.dev.vars.example` to `apps/gateway/.dev.vars` and replace placeholders locally. Never commit `.dev.vars` or real credentials.
+
+For a future Cloudflare deployment, create the gateway secret from `apps/gateway`:
+
+```bash
+npx wrangler secret put AFO_ASK_COPILOT_TOKEN
+```
+
+`COPILOT_GITHUB_TOKEN` and `RUNTIME_SHARED_SECRET` are reserved for v0.3 Container integration and must also be stored as Cloudflare secrets when that phase is approved.
+
+## Request controls
+
+Default v0.2 controls:
+
+- maximum request body: 256,000 bytes,
+- maximum prompt length: 20,000 characters,
+- content type: `application/json`,
+- fixed-window in-isolate rate limit: 60 authenticated requests per 60 seconds,
+- generated `X-Request-ID` on responses,
+- structured JSON logs containing metadata only.
+
+The Worker does not log authorization headers or full prompts. The v0.2 rate limiter is a best-effort single-isolate control, not a distributed production quota system.
 
 ## Repository layout
 
 ```text
-apps/gateway/          Cloudflare Worker, MCP endpoint, and Container class
-runtime/               Node.js Copilot SDK service and Docker image
+apps/gateway/          Cloudflare Worker and Remote MCP protocol implementation
+runtime/               Node.js Copilot SDK service and Docker image for v0.3
+tests/                 Node built-in gateway tests
 docs/                  Architecture, security, operations, and decisions
-.github/workflows/     Static validation
+.github/workflows/     Test and validation CI
 ROADMAP.md             Ordered delivery plan
 AGENTS.md              Repository operating instructions
 ```
 
-## Local prerequisites
+## Validation
 
-- Node.js 22
-- npm
-- Docker
-- Cloudflare Workers Paid account with Containers
-- Wrangler authentication
-- GitHub Copilot access
-- A GitHub token appropriate for Copilot SDK requests
-
-## Install
-
-```bash
-npm install
-```
-
-## Static validation
+No real secrets are required for the v0.2 automated tests.
 
 ```bash
 npm test
+npm run validate
+node --check apps/gateway/src/index.js
+node --check runtime/src/server.js
 ```
 
-## Local runtime
+`npm run validate` checks JavaScript syntax, parses the tracked JSON files, and verifies that the MCP manifest, `tools/list`, protocol versions, request limits, package versions, and token secret name remain synchronized.
 
-Create `runtime/.env` from `runtime/.env.example`, then:
+## Deployment boundary
 
-```bash
-npm run dev:runtime
-```
-
-## Local Worker
-
-Create `apps/gateway/.dev.vars` from `apps/gateway/.dev.vars.example`, then:
-
-```bash
-npm run dev:gateway
-```
-
-The initial MCP endpoint is:
-
-```text
-http://localhost:8787/mcp
-```
-
-## Required Cloudflare secrets
-
-Set these from `apps/gateway` before deployment:
-
-```bash
-npx wrangler secret put MCP_BEARER_TOKEN
-npx wrangler secret put COPILOT_GITHUB_TOKEN
-npx wrangler secret put RUNTIME_SHARED_SECRET
-```
-
-Never commit their values.
-
-## Deployment
-
-Deployment is intentionally not automated in the bootstrap commit. The first deployment must happen only after:
-
-1. dependency versions are pinned,
-2. the Container image builds locally for `linux/amd64`,
-3. Worker and runtime syntax checks pass,
-4. authentication denial paths are tested,
-5. the MCP transport is tested with the target ChatGPT client,
-6. a live Copilot request succeeds without mutation capability.
-
-See [ROADMAP.md](ROADMAP.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Production deployment is intentionally outside v0.2. Do not deploy without explicit approval. Before a later live release, build and validate the Container, validate Wrangler configuration, provision secrets, test live unauthorized denial, test live authenticated `tools/list`, and verify actual runtime behavior separately from pipeline status.
 
 ## Design rules
 
 - Private and single-user first.
 - Deny by default.
-- Keep GitHub mutation tools out of phase one.
-- Keep the Copilot token inside Cloudflare secrets.
-- Do not treat a successful deploy as proof the service works.
-- Verify the live MCP endpoint and a real Copilot response.
+- Keep mutation tools unavailable.
+- Keep the Copilot token out of the Worker request path and Git history.
+- Keep Copilot SDK and CLI execution in the Container.
+- Do not treat a successful commit, CI run, or deployment as proof of live behavior.
 - Record meaningful revisions in CairnStone and update the chain HEAD.
 
 ## Documentation
 
+- [Roadmap](ROADMAP.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
 - [Operations](docs/OPERATIONS.md)

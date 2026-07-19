@@ -10,14 +10,9 @@
   "vars": {
     "AUTH_MODE": "required",
     "ALLOWED_ORIGINS": "https://chatgpt.com,https://chat.openai.com",
-    "DEPLOYMENT_ENV": "development"
-  },
-  "secrets": {
-    "required": [
-      "MCP_BEARER_TOKEN",
-      "COPILOT_GITHUB_TOKEN",
-      "RUNTIME_SHARED_SECRET"
-    ]
+    "DEPLOYMENT_ENV": "development",
+    "RATE_LIMIT_REQUESTS": "60",
+    "RATE_LIMIT_WINDOW_SECONDS": "60"
   },
   "containers": [
     {

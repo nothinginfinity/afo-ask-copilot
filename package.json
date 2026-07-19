@@ -1,6 +1,6 @@
 {
   "name": "afo-ask-copilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -8,7 +8,8 @@
     "runtime"
   ],
   "scripts": {
-    "test": "node scripts/validate.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "validate": "node scripts/validate.mjs",
     "dev:gateway": "npm --workspace @afo/ask-copilot-gateway run dev",
     "deploy:gateway": "npm --workspace @afo/ask-copilot-gateway run deploy",
     "dev:runtime": "npm --workspace @afo/ask-copilot-runtime run dev",
