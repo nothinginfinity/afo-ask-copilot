@@ -1,6 +1,6 @@
 {
   "name": "@afo/ask-copilot-gateway",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,9 +9,6 @@
     "check": "node --check src/index.js && node --check src/mcp.js"
   },
   "dependencies": {
-    "@cloudflare/containers": "latest"
-  },
-  "devDependencies": {
-    "wrangler": "latest"
+    "@cloudflare/containers": "0.3.7"
   }
 }

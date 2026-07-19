@@ -12,7 +12,8 @@
     "ALLOWED_ORIGINS": "https://chatgpt.com,https://chat.openai.com",
     "DEPLOYMENT_ENV": "development",
     "RATE_LIMIT_REQUESTS": "60",
-    "RATE_LIMIT_WINDOW_SECONDS": "60"
+    "RATE_LIMIT_WINDOW_SECONDS": "60",
+    "RUNTIME_TIMEOUT_MS": "60000"
   },
   "containers": [
     {

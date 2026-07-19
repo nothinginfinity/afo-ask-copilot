@@ -1,7 +1,7 @@
 {
   "name": "afo-ask-copilot",
-  "version": "0.2.0",
-  "description": "Private single-user read-only Remote MCP gateway for AFO Ask Copilot.",
+  "version": "0.3.0",
+  "description": "Private single-user read-only Remote MCP gateway backed by an authenticated GitHub Copilot Container runtime.",
   "transport": {
     "type": "streamable_http",
     "path": "/mcp",
@@ -14,12 +14,14 @@
   ],
   "limits": {
     "request_body_bytes": 256000,
-    "prompt_characters": 20000
+    "prompt_characters": 20000,
+    "runtime_timeout_ms_default": 60000,
+    "runtime_timeout_ms_maximum": 120000
   },
   "tools": [
     {
       "name": "ask_copilot",
-      "description": "Accept a read-only question for GitHub Copilot. In v0.2 the gateway returns an explicit placeholder and does not contact Copilot.",
+      "description": "Ask GitHub Copilot a read-only text question through the authenticated AFO Container runtime.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -35,19 +37,19 @@
             "minLength": 3,
             "maxLength": 200,
             "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-            "description": "Optional repository in owner/repo form."
+            "description": "Optional repository metadata in owner/repo form. Repository grounding is not implied by v0.3."
           },
           "model": {
             "type": "string",
             "minLength": 1,
             "maxLength": 100,
-            "description": "Optional future Copilot model identifier."
+            "description": "Optional Copilot model identifier verified by the runtime."
           },
           "session_id": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "Optional future resumable Copilot session identifier."
+            "description": "Optional resumable Copilot session identifier."
           }
         },
         "required": [
@@ -56,6 +58,6 @@
       }
     }
   ],
-  "runtime_execution": "placeholder_not_contacted",
+  "runtime_execution": "authenticated_container_copilot_sdk_1.0.7",
   "mutation_tools_enabled": false
 }

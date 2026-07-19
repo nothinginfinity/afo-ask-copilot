@@ -1,3 +1,3 @@
 AFO_ASK_COPILOT_TOKEN=replace-with-a-long-random-value
-COPILOT_GITHUB_TOKEN=reserved-for-v0.3-do-not-use-a-real-token-yet
-RUNTIME_SHARED_SECRET=reserved-for-v0.3-replace-with-a-different-long-random-value
+RUNTIME_SHARED_SECRET=replace-with-a-different-long-random-value
+COPILOT_GITHUB_TOKEN=replace-with-a-real-token-only-for-local-container-testing
