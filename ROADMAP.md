@@ -45,10 +45,11 @@ From ChatGPT on an iPhone, securely ask GitHub Copilot questions through a contr
 - [x] Replace the v0.2 placeholder with Container forwarding.
 - [x] Add mock tests that require no real GitHub token.
 - [x] Add CI Docker build and smoke verification.
-- [ ] Inject real secrets manually.
-- [ ] Perform the first authenticated development deployment and real Copilot request.
+- [x] Fix Docker verification ordering so bundled CLI verification runs after `src` is copied.
+- [x] Remove completed `.afo-v03` staging payloads and the one-shot apply workflow.
+- [x] Verify the clean final v0.3 commit through the permanent `Validate` workflow.
 
-Exit criterion for implementation: code, tests, lockfiles, Docker definition, documentation, and CairnStone graph are ready for manual secret injection. A real response is a separate post-secret verification step.
+Exit criterion met: code, tests, lockfiles, Docker definition, documentation, clean repository state, and CairnStone graph are ready for manual secret injection. A real Copilot response remains a separate authenticated deployment verification step in v0.4.
 
 ## Next
 
@@ -58,6 +59,7 @@ Exit criterion for implementation: code, tests, lockfiles, Docker definition, do
 - [ ] Deploy the development Worker and Container.
 - [ ] Verify live unauthorized denial.
 - [ ] Verify live authenticated `tools/list`.
+- [ ] Perform the first authenticated real Copilot request.
 - [ ] Verify a real new-session Copilot response.
 - [ ] Verify a real resumed-session response.
 - [ ] Curl the live health endpoint after deployment.
