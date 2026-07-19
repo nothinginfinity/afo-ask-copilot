@@ -1,6 +1,5 @@
 node_modules
-npm-debug.log*
 .env
 .env.*
-!.env.example
-session-state
+npm-debug.log*
+.DS_Store
