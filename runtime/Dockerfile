@@ -5,9 +5,10 @@ ENV PORT=8080
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm run verify:bundled-cli
+RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY --chown=node:node src ./src
+RUN npm run verify:bundled-cli
 
 USER node
 EXPOSE 8080
