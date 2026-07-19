@@ -1,134 +1,101 @@
 # AFO Ask Copilot Roadmap
 
-## Guiding outcome
+## Goal
 
-From ChatGPT on an iPhone, securely ask GitHub Copilot questions about approved repositories, preserve resumable sessions, and later delegate tightly controlled draft-PR work.
+From ChatGPT on an iPhone, securely ask GitHub Copilot questions through a controlled Cloudflare boundary, preserve resumable sessions, and later add explicitly authorized repository context and delegation.
 
-## Completed foundation
+## Completed
 
-### v0.1.0 — Repository bootstrap
+### v0.1 — Repository bootstrap
 
-- [x] Create private repository.
 - [x] Establish Worker/Container split.
-- [x] Add initial MCP gateway scaffold.
-- [x] Add Copilot SDK runtime scaffold.
-- [x] Add security and operations documentation.
-- [x] Add static CI validation.
-- [x] Create the first CairnStone repository orientation and set HEAD.
+- [x] Add initial MCP and runtime scaffolds.
+- [x] Add architecture, security, and operations documentation.
+- [x] Create the initial CairnStone orientation.
 
-Exit criterion: repository architecture and safety boundaries are documented and statically valid.
+### v0.2 — Remote MCP Gateway
 
-## Current phase
+- [x] Implement authenticated JSON-RPC 2.0 `/mcp`.
+- [x] Expose only `ask_copilot`.
+- [x] Add origin, content-type, body, prompt, and rate controls.
+- [x] Add metadata-only request logs.
+- [x] Return an honest placeholder without contacting Copilot.
 
-### v0.2.0 — Remote MCP Gateway
+### v0.3 — Container Copilot Runtime
 
-- [x] Add a testable JSON-RPC 2.0 gateway core independent of Cloudflare-only imports.
-- [x] Add `GET /health` and authenticated `POST /mcp`.
-- [x] Standardize the Worker bearer secret as `AFO_ASK_COPILOT_TOKEN`.
-- [x] Support `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.
-- [x] Expose only the `ask_copilot` tool during the placeholder phase.
-- [x] Return an honest placeholder that states Copilot was not contacted.
-- [x] Add request-body, prompt-length, content-type, origin, and rate controls.
-- [x] Add generated request IDs and structured metadata-only logs.
-- [x] Add Node built-in tests for success and denial/error paths.
-- [x] Synchronize the manifest, gateway contract, limits, versions, and README.
-- [ ] Verify the implementation commit in GitHub Actions.
-- [ ] Re-stone changed files, link graph edges, and set the new chain HEAD.
+- [x] Pin `@github/copilot-sdk@1.0.7`.
+- [x] Commit root and standalone runtime lockfiles.
+- [x] Verify the bundled platform Copilot CLI package.
+- [x] Use Node 22 and `npm ci` in Docker.
+- [x] Run the image as a non-root user.
+- [x] Add Container health behavior and SIGTERM/SIGINT handling.
+- [x] Implement a long-lived client manager.
+- [x] Construct `CopilotClient` with `gitHubToken` and `useLoggedInUser: false`.
+- [x] Verify client status and authentication status after startup.
+- [x] Recreate the client after unrecoverable transport failure.
+- [x] Implement session creation, active reuse, and cold resume.
+- [x] Return a normalized session error instead of silently replacing failed resume state.
+- [x] Keep in-memory sessions active across requests.
+- [x] Configure sessions with `availableTools: []`.
+- [x] Implement normalized model discovery without a second model cache.
+- [x] Read final text from `result.data.content`.
+- [x] Abort the session after SDK wait timeout.
+- [x] Implement bounded graceful shutdown and `forceStop()` fallback.
+- [x] Authenticate Worker-to-Container traffic with `RUNTIME_SHARED_SECRET`.
+- [x] Replace the v0.2 placeholder with Container forwarding.
+- [x] Add mock tests that require no real GitHub token.
+- [x] Add CI Docker build and smoke verification.
+- [ ] Inject real secrets manually.
+- [ ] Perform the first authenticated development deployment and real Copilot request.
 
-Exit criterion: the authenticated Worker protocol boundary is locally tested and CI-verified without contacting Copilot or deploying live.
+Exit criterion for implementation: code, tests, lockfiles, Docker definition, documentation, and CairnStone graph are ready for manual secret injection. A real response is a separate post-secret verification step.
 
-## Next phase
+## Next
 
-### v0.3.0 — Container Copilot Runtime
+### v0.4 — Cloudflare development deployment
 
-- [ ] Install and pin a verified `@github/copilot-sdk` version.
-- [ ] Confirm the bundled Copilot CLI launches in the Container.
-- [ ] Implement and test `createSession`, `resumeSession`, `sendAndWait`, and `listModels`.
-- [ ] Forward approved `ask_copilot` calls from Worker to the named Container.
-- [ ] Authenticate the Worker-to-Container boundary with `RUNTIME_SHARED_SECRET`.
-- [ ] Verify the Container receives `COPILOT_GITHUB_TOKEN` only through Cloudflare secrets.
-- [ ] Confirm read-only session configuration and absence of mutation tools.
-- [ ] Add runtime timeout, failure normalization, and redaction tests.
-- [ ] Build the Container locally.
+- [ ] Add the three secrets manually.
+- [ ] Deploy the development Worker and Container.
+- [ ] Verify live unauthorized denial.
+- [ ] Verify live authenticated `tools/list`.
+- [ ] Verify a real new-session Copilot response.
+- [ ] Verify a real resumed-session response.
+- [ ] Curl the live health endpoint after deployment.
+- [ ] Record deployment and live-response receipts in CairnStone.
 
-Exit criterion: a local authenticated MCP `tools/call` reaches the Container, contacts Copilot, and returns normalized text without mutation capability.
-
-## v0.4.0 — Cloudflare development deployment
-
-- [ ] Create the Cloudflare Worker/Container application.
-- [ ] Configure `ask-copilot.agentfeedoptimization.com`.
-- [ ] Provision Worker and Container secrets.
-- [ ] Restrict allowed origins and hosts.
-- [ ] Replace or augment the in-isolate limiter with a durable production control.
-- [ ] Add deployment metadata and health receipts.
-- [ ] Curl the live endpoint after deployment.
-- [ ] Verify a real Copilot request from the live Worker.
-
-Exit criterion: authenticated live MCP requests succeed and unauthenticated requests fail.
-
-## v0.5.0 — ChatGPT connector validation
+### v0.5 — ChatGPT connector validation
 
 - [ ] Register the remote MCP endpoint in ChatGPT.
-- [ ] Verify tool discovery on iPhone.
-- [ ] Verify `ask_copilot` from the ChatGPT iPhone app.
-- [ ] Validate timeout and retry behavior on Container cold starts.
-- [ ] Confirm no secret appears in ChatGPT output, logs, or tool errors.
-- [ ] Document iPhone recovery steps.
+- [ ] Verify tool discovery and use on iPhone.
+- [ ] Validate Container cold-start timeout behavior.
+- [ ] Confirm no secret reaches ChatGPT output or logs.
 
-Exit criterion: reliable read-only use from the ChatGPT iPhone app.
+### v0.6 — Durable session and receipt layer
 
-## v0.6.0 — Durable session and receipt layer
+- [ ] Define D1 session metadata.
+- [ ] Persist session handles and non-sensitive receipts.
+- [ ] Preserve graph-based canonical state.
 
-- [ ] Define D1 session metadata schema.
-- [ ] Persist explicit Copilot session handles.
-- [ ] Add request, response, latency, model, and error receipts.
-- [ ] Store no prompt or response content by default.
-- [ ] Add retention and cleanup policy.
-- [ ] Create CairnStone receipts for releases and live verification.
+### v0.7 — Approved repository context
 
-Exit criterion: sessions survive Container restarts and are auditable without leaking content.
+- [ ] Add repository allowlists and owner/repo/ref validation.
+- [ ] Connect approved read-only GitHub and CairnStone context tools.
+- [ ] Use CairnStone HEAD rather than timestamps.
+- [ ] Add repository-content prompt-injection boundaries.
 
-## v0.7.0 — Repository context controls
+### v0.8 — Observability and resilience
 
-- [ ] Add repository allowlist.
-- [ ] Add owner/repo/ref validation beyond metadata acceptance.
-- [ ] Connect approved read-only AFO GitHub MCP tools.
-- [ ] Add CairnStone chain-manifest context.
-- [ ] Use graph HEAD rather than timestamps for canonical project state.
-- [ ] Add prompt-injection boundaries for repository content.
+- [ ] Add distributed rate control.
+- [ ] Add lifecycle metrics and trace propagation.
+- [ ] Add restart and recovery drills.
 
-Exit criterion: Copilot can answer grounded questions about explicitly approved repository state.
-
-## v0.8.0 — Observability and resilience
-
-- [ ] Add OpenTelemetry trace propagation.
-- [ ] Add Container lifecycle metrics.
-- [ ] Add timeout budgets and circuit breaking.
-- [ ] Add health degradation states.
-- [ ] Add retry-safe idempotency keys.
-- [ ] Add dependency and protocol compatibility checks.
-
-Exit criterion: failures are diagnosable without exposing credentials or private source.
-
-## v0.9.0 — Controlled delegation design
+### v0.9 — Controlled delegation design
 
 - [ ] Design a separate mutation authorization plane.
-- [ ] Require explicit user confirmation for every mutation task.
-- [ ] Use GitHub's official Copilot draft-PR workflow where available.
-- [ ] Restrict target repositories, base branches, and permissions.
-- [ ] Require draft PRs only.
-- [ ] Require human review before merge.
-- [ ] Record immutable receipts.
+- [ ] Require explicit confirmation for every mutation.
+- [ ] Restrict any future write path to draft pull requests.
 
-Exit criterion: approved tasks can create draft PRs without direct pushes to protected branches.
+### v1.0 — Private production release
 
-## v1.0.0 — Private production release
-
-- [ ] Complete threat model and recovery drill.
-- [ ] Pin runtime, SDK, CLI, and Wrangler versions.
-- [ ] Enable production deployment workflow with manual approval.
-- [ ] Confirm backups and session cleanup.
-- [ ] Publish final operator runbook.
-- [ ] Create release stone, link it to source and verification stones, and set HEAD.
-
-Exit criterion: dependable private daily use from iPhone with read-only queries and explicitly gated draft-PR delegation.
+- [ ] Complete threat model, recovery drill, and live validation.
+- [ ] Make the repository private again after the update window.

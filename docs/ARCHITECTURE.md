@@ -1,117 +1,94 @@
 # Architecture
 
-## System boundary
-
-AFO Ask Copilot has two execution layers.
-
-### 1. Cloudflare Worker control plane
-
-Responsibilities:
-
-- expose the Remote MCP endpoint,
-- authenticate the single approved caller,
-- validate origin, content type, request size, JSON, and JSON-RPC shape,
-- generate request IDs,
-- enforce prompt and best-effort rate limits,
-- publish a deterministic tool allowlist,
-- normalize protocol errors,
-- emit structured metadata-only logs,
-- forward approved runtime calls to one named Container beginning in v0.3,
-- later write minimal audit metadata to D1.
-
-The Worker must not execute the Copilot SDK or CLI.
-
-### 2. Cloudflare Container execution plane
-
-Responsibilities beginning in v0.3:
-
-- run Node.js in a Linux environment,
-- load the GitHub Copilot SDK,
-- run the SDK-bundled Copilot CLI,
-- create and resume Copilot sessions,
-- enforce read-only session configuration,
-- return normalized JSON to the Worker.
-
-The Container must not be publicly routable. It is reached through the Worker's named Container binding.
-
-## v0.2 request flow
+## Boundary
 
 ```text
-1. Client sends a request to the Worker.
-2. GET /health returns non-sensitive readiness metadata.
-3. POST /mcp validates Origin when present.
-4. Worker validates Authorization: Bearer <AFO_ASK_COPILOT_TOKEN>.
-5. Worker applies an in-isolate fixed-window rate limit.
-6. Worker requires application/json and caps the request body.
-7. Worker parses and validates one JSON-RPC 2.0 message.
-8. Worker handles initialize, notifications/initialized, ping, and tools/list locally.
-9. Worker validates tools/call arguments for ask_copilot.
-10. Worker returns explicit placeholder metadata stating Copilot was not contacted.
+ChatGPT
+  -> Cloudflare Worker Remote MCP
+  -> authenticated Container request
+  -> Node 22 runtime
+  -> long-lived CopilotClient
+  -> session manager
+  -> bundled GitHub Copilot runtime
 ```
 
-No v0.2 request reaches the Container.
+The Worker is the public protocol and policy plane. The Container is the Linux execution plane.
 
-## v0.3 request flow
+## Worker responsibilities
 
-```text
-1. Worker completes the v0.2 control-plane checks.
-2. Worker maps ask_copilot to a fixed internal runtime route.
-3. Worker gets the named Container instance primary.
-4. Worker authenticates the internal request with RUNTIME_SHARED_SECRET.
-5. Runtime creates or resumes a Copilot SDK session.
-6. Runtime sends the prompt with read-only policy constraints.
-7. Runtime returns normalized content and session metadata.
-8. Worker returns an MCP tool result.
+- Remote MCP JSON-RPC behavior.
+- `AFO_ASK_COPILOT_TOKEN` bearer authentication.
+- origin, content-type, body-size, prompt-size, and rate controls.
+- tool and argument allowlists.
+- bounded runtime timeout metadata.
+- `RUNTIME_SHARED_SECRET` on the private Container request.
+- normalized MCP success and error responses.
+
+The Worker does not construct SDK clients, launch CLI processes, own SDK sessions, cache models, perform reconnects, or receive the Copilot token in the request path.
+
+## Container responsibilities
+
+### Client manager
+
+One `CopilotClient` exists for the Container lifetime. It is constructed as:
+
+```js
+new CopilotClient({
+  gitHubToken: process.env.COPILOT_GITHUB_TOKEN,
+  useLoggedInUser: false,
+});
 ```
 
-## Protocol structure
+The manager starts the bundled stdio runtime, calls `getStatus()`, calls `getAuthStatus()`, reuses the client, marks it unhealthy on transport failure, stops the old client, and creates a fresh client on the next request.
 
-`apps/gateway/src/index.js` contains the Cloudflare-specific Container class and delegates fetch handling to `apps/gateway/src/mcp.js`.
+### Session manager
 
-`apps/gateway/src/mcp.js` contains the testable protocol and control-plane core. It intentionally has no imports from `cloudflare:workers` or `@cloudflare/containers`, allowing Node's built-in test runner to exercise the real request handler without mocking the Cloudflare module loader.
+The in-memory map stores session objects with their client generation. A new request without `session_id` gets a generated stable ID passed to `createSession`. A request with an active ID reuses the object. A cold ID calls `resumeSession`. Failed resume returns `COPILOT_SESSION_RESUME_FAILED`; it never creates unrelated state.
 
-The source tool definition is exported once and validated against `apps/gateway/mcp.manifest.json` to prevent manifest and `tools/list` drift.
+The initial configuration is deliberately narrow:
 
-## Session model
+```js
+{
+  streaming: false,
+  availableTools: []
+}
+```
 
-MCP transport state and Copilot conversation state are separate.
+No shell, filesystem, MCP, or mutation capability is enabled.
 
-- The v0.2 gateway is stateless except for a best-effort in-isolate rate bucket.
-- Optional `session_id` is accepted as metadata but is not used.
-- Copilot session creation and resumption begin in v0.3.
-- Durable session metadata belongs in D1 in a later phase.
+### Model discovery
 
-## Authentication model
+The runtime calls `client.listModels()` and normalizes:
 
-Three secrets have separate purposes:
+- `id`
+- `name`
+- `capabilities`
+- `supportedReasoningEfforts`
+- `defaultReasoningEffort`
 
-- `AFO_ASK_COPILOT_TOKEN`: authenticates ChatGPT to the Worker.
-- `COPILOT_GITHUB_TOKEN`: will authenticate the Copilot SDK/CLI in v0.3.
-- `RUNTIME_SHARED_SECRET`: will authenticate Worker requests inside the Container boundary in v0.3.
+The SDK remains the model cache and source of truth.
 
-All real values must be Cloudflare secrets. No real value belongs in GitHub.
+### Timeout behavior
 
-## Repository metadata
+`session.sendAndWait({ prompt }, timeoutMs)` only stops waiting. When its timeout error is detected, the runtime best-effort calls `session.abort()` before returning `COPILOT_TIMEOUT`.
 
-The v0.2 `ask_copilot` schema accepts an optional `repository` string in `owner/repo` form. It is returned as placeholder metadata only. The Worker does not fetch, mount, authorize, or inspect that repository.
+### Recovery and shutdown
 
-Repository-aware work will later require:
+Transport failures invalidate all in-memory session objects tied to the old client generation. The next request creates a fresh client, and a supplied stable session ID is resumed.
 
-- an explicit repository allowlist,
-- read-only AFO GitHub tools,
-- CairnStone chain manifests and HEAD pointers,
-- normalized owner/repo/ref inputs,
-- prompt-injection boundaries for repository content.
+On SIGTERM or SIGINT, the HTTP server stops accepting requests, waits within a bounded policy, disconnects active sessions without deleting them, calls `client.stop()`, inspects cleanup errors, and uses `forceStop()` only when graceful cleanup fails.
 
-## Mutation architecture
+## Runtime HTTP contract
 
-Mutation capability is intentionally absent.
+Unauthenticated health:
 
-A future mutation plane must:
+- `GET /health`
 
-- expose separate tools,
-- require explicit user confirmation,
-- use least-privilege GitHub credentials,
-- create draft PRs rather than direct branch pushes,
-- record immutable receipts,
-- remain disabled by default.
+Authenticated with `x-afo-runtime-token`:
+
+- `GET /v1/models`
+- `POST /v1/sessions`
+- `POST /v1/sessions/{id}/resume`
+- `POST /v1/ask`
+
+The authentication check occurs before request-body parsing.

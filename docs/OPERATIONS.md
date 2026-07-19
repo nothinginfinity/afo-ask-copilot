@@ -1,103 +1,59 @@
 # Operations
 
-## Secret setup
+## Local validation without secrets
+
+```bash
+npm ci
+npm test
+npm run validate
+npm run verify:bundled-cli
+docker build -t afo-ask-copilot-runtime -f runtime/Dockerfile runtime
+```
+
+The runtime can start without secrets for a deliberate fail-closed smoke test. `/health` remains available and reports `ready: false`. Protected operations return a normalized configuration error.
+
+## Local no-secret smoke
+
+```bash
+docker run --rm -p 8080:8080 afo-ask-copilot-runtime
+curl --fail http://127.0.0.1:8080/health
+```
+
+Do not interpret this as Copilot authentication validation.
+
+## Manual secret injection
 
 From `apps/gateway`:
 
 ```bash
-npx wrangler secret put MCP_BEARER_TOKEN
-npx wrangler secret put COPILOT_GITHUB_TOKEN
+npx wrangler secret put AFO_ASK_COPILOT_TOKEN
 npx wrangler secret put RUNTIME_SHARED_SECRET
+npx wrangler secret put COPILOT_GITHUB_TOKEN
 ```
 
-Use different random values for the two service secrets.
+Use different values. Do not paste them into issues, commits, CairnStone reports, or chat output.
 
-## Local validation
+## Development deployment verification
 
-From the repository root:
+1. Build and test locally.
+2. Confirm the GitHub Actions validation and Docker job is green.
+3. Add secrets manually.
+4. Deploy only after explicit approval.
+5. Test unauthenticated `/mcp` denial.
+6. Test authenticated `tools/list`.
+7. Send a harmless `ask_copilot` prompt without a session ID.
+8. Verify actual text and a new stable session ID.
+9. Send a second prompt with that session ID.
+10. Inspect logs for metadata-only output.
+11. Record the live verification separately from the implementation receipt.
 
-```bash
-npm test
-```
+## Failure interpretation
 
-Build the Container:
+- `RUNTIME_CONFIGURATION_ERROR`: a required Container secret is missing.
+- `RUNTIME_AUTHENTICATION_FAILED`: Worker and Container shared-secret values differ.
+- `COPILOT_CLIENT_START_FAILED`: bundled runtime, token, or Copilot authentication failed during client startup.
+- `COPILOT_TIMEOUT`: waiting stopped and the runtime attempted `session.abort()`.
+- `COPILOT_SESSION_RESUME_FAILED`: requested state could not be resumed; no replacement session was created.
+- `COPILOT_TRANSPORT_ERROR`: client is marked unhealthy and will be recreated on the next request.
 
-```bash
-docker build --platform linux/amd64 -t afo-ask-copilot-runtime:local runtime
-```
-
-Run the Container:
-
-```bash
-docker run --rm -p 8080:8080 --env-file runtime/.env afo-ask-copilot-runtime:local
-```
-
-Check it:
-
-```bash
-curl -sS http://127.0.0.1:8080/health
-```
-
-## Worker development
-
-Create `apps/gateway/.dev.vars` from the example. Then:
-
-```bash
-npm run dev:gateway
-```
-
-The Worker uses the configured Container binding; Docker must be available to Wrangler.
-
-## Minimum MCP smoke tests
-
-Unauthenticated requests must fail:
-
-```bash
-curl -i -X POST http://127.0.0.1:8787/mcp \
-  -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-Authenticated tool discovery:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8787/mcp \
-  -H "authorization: Bearer $MCP_BEARER_TOKEN" \
-  -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-Copilot call:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8787/mcp \
-  -H "authorization: Bearer $MCP_BEARER_TOKEN" \
-  -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"Reply with the word ready."}}}'
-```
-
-## Deployment gates
-
-Do not deploy unless:
-
-- static validation passes,
-- Container image builds,
-- the runtime health check passes,
-- unauthorized MCP access is denied,
-- tool discovery returns only approved tools,
-- a local Copilot request succeeds,
-- dependencies are pinned,
-- the deployment change is reviewed.
-
-## Live verification
-
-After deployment:
-
-1. Check `/health`.
-2. Confirm unauthorized `/mcp` returns 401.
-3. Confirm authenticated `tools/list`.
-4. Confirm a real `ask_copilot` response.
-5. Confirm logs contain no secrets or full prompt/response bodies.
-6. Confirm Container cold-start behavior.
-7. Record deployment and verification receipts.
-8. Re-stone the release and set CairnStone HEAD.
+A Docker build alone does not prove token validity, Copilot entitlement, model availability, or end-to-end behavior.
