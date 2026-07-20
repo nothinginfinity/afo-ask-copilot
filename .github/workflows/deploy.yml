@@ -159,6 +159,6 @@ jobs:
 
       - name: Run authenticated live smoke test
         env:
-          WORKER_URL: ${{ steps.deploy.outputs.worker_url }}
+          WORKER_URL: https://afo-ask-copilot.jaredtechfit.workers.dev
           AFO_ASK_COPILOT_TOKEN: ${{ secrets.AFO_ASK_COPILOT_TOKEN }}
         run: node scripts/live-smoke.mjs
